@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { LanguageSwitcher, useLanguage } from "@/lib/language";
+import { LanguageSwitcher, useLanguage } from "../lib/language";
 
 type MailMessage = {
   id: string;

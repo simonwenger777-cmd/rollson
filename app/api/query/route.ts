@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { queryUpstream, warmupUpstream } from "@/lib/upstream";
+import { queryUpstream, warmupUpstream } from "../../../lib/upstream";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
