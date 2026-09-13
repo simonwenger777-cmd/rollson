@@ -89,13 +89,15 @@ function parseJson(body: string) {
   }
 }
 
-function isChallenge(status: number, body: string) {
+function isChallenge(status: number, body: string, json: Record<string, unknown> | null) {
   const lower = body.slice(0, 500).toLowerCase();
+  const message = typeof json?.message === "string" ? json.message : "";
   return (
     status === 403 ||
     status === 503 ||
     lower.includes("just a moment") ||
-    lower.includes("cf-browser-verification")
+    lower.includes("cf-browser-verification") ||
+    message.includes("Upstream error")
   );
 }
 
@@ -126,8 +128,7 @@ async function queryOrigin(origin: string, cdKey: string) {
     lastStatus = response.status;
     const json = parseJson(response.body);
     if (json && json.ok === true) return json;
-    if (json && !isChallenge(response.status, response.body)) return json;
-    if (!isChallenge(response.status, response.body) && json) return json;
+    if (json && !isChallenge(response.status, response.body, json)) return json;
   }
   return { ok: false, message: `Upstream error (${lastStatus || "network"})`, origin };
 }
