@@ -36,6 +36,11 @@ async function waitForSite(target: Page) {
       timeout: 25000,
     })
     .catch(() => undefined);
+  await target
+    .waitForSelector("input.email-input, form.mailbox-form, .mailbox-form", {
+      timeout: 20000,
+    })
+    .catch(() => undefined);
 }
 
 async function getPage() {
@@ -56,27 +61,46 @@ async function getPage() {
   return page;
 }
 
+async function postKey(target: Page, cdKey: string) {
+  return target.evaluate(async (key) => {
+    const response = await fetch("/api/query", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cdKey: key }),
+    });
+    const text = await response.text();
+    try {
+      return { okHttp: response.ok, json: JSON.parse(text) as Record<string, unknown> };
+    } catch {
+      return { okHttp: false, json: null, preview: text.slice(0, 120) };
+    }
+  }, cdKey);
+}
+
 export async function prepareBrowser() {
   await getPage();
 }
 
 export async function queryViaBrowser(cdKey: string) {
   return enqueue(async () => {
-    const target = await getPage();
-    const title = await target.title();
-    if (title.toLowerCase().includes("just a moment")) {
-      await waitForSite(target);
+    let target = await getPage();
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const title = await target.title();
+      if (title.toLowerCase().includes("just a moment") || attempt > 0) {
+        await waitForSite(target);
+      }
+
+      const result = await postKey(target, cdKey);
+      if (result.json && !(typeof result.json.message === "string" && result.json.message.includes("Upstream error"))) {
+        return result.json;
+      }
+
+      console.error(
+        `[browser-query] attempt=${attempt + 1} title=${title} preview=${"preview" in result ? result.preview : JSON.stringify(result.json)}`
+      );
     }
 
-    const data = await target.evaluate(async (key) => {
-      const response = await fetch("/api/query", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cdKey: key }),
-      });
-      return response.json();
-    }, cdKey);
-
-    return data as Record<string, unknown>;
+    throw new Error("browser query still blocked");
   });
 }
