@@ -25,6 +25,8 @@ type QueryResult = {
 
 const BRAND = "Rollson";
 const FUNPAY_URL = "https://funpay.com/users/16210908/";
+const AUTO_POLL_MS = 10_000;
+const AUTO_POLL_MAX = 30;
 
 function Header() {
   return (
@@ -75,7 +77,9 @@ export default function HomePage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [openMail, setOpenMail] = useState<Record<string, boolean>>({});
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [pollsDone, setPollsDone] = useState(0);
   const inFlight = useRef(false);
+  const pollsDoneRef = useRef(0);
 
   const query = useCallback(
     async (key: string, mode: "open" | "poll") => {
@@ -86,6 +90,8 @@ export default function HomePage() {
         setResult(null);
         setCopiedId(null);
         setOpenMail({});
+        pollsDoneRef.current = 0;
+        setPollsDone(0);
       } else {
         setPolling(true);
       }
@@ -100,7 +106,7 @@ export default function HomePage() {
           return (await response.json()) as QueryResult;
         };
         let data = await requestInbox();
-        if (!data.ok && String(data.message || "").includes("Upstream error")) {
+        if (mode === "open" && !data.ok && String(data.message || "").includes("Upstream error")) {
           await new Promise((resolve) => setTimeout(resolve, 400));
           data = await requestInbox();
         }
@@ -159,16 +165,16 @@ export default function HomePage() {
   useEffect(() => {
     if (!activeKey || !result?.ok) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== "hidden") void query(activeKey, "poll");
-    }, 8000);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void query(activeKey, "poll");
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
+      if (document.visibilityState === "hidden") return;
+      if (pollsDoneRef.current >= AUTO_POLL_MAX) {
+        window.clearInterval(timer);
+        return;
+      }
+      pollsDoneRef.current += 1;
+      setPollsDone(pollsDoneRef.current);
+      void query(activeKey, "poll");
+    }, AUTO_POLL_MS);
+    return () => window.clearInterval(timer);
   }, [activeKey, result?.ok, query]);
 
   const hasMessages = !!(result && result.ok && result.messages?.length);
@@ -235,7 +241,11 @@ export default function HomePage() {
               <div className="inbox-live-bar" aria-live="polite">
                 <span className={`live-dot${polling ? " is-pulse" : ""}`} aria-hidden="true" />
                 <span>
-                  {polling ? t("main.autoRefreshing") : t("main.autoRefreshOn")}
+                  {polling
+                    ? t("main.autoRefreshing")
+                    : pollsDone >= AUTO_POLL_MAX
+                      ? t("main.autoRefreshDone")
+                      : t("main.autoRefreshOn", { done: pollsDone, max: AUTO_POLL_MAX })}
                   {lastChecked ? ` · ${t("main.lastChecked", { time: lastChecked.toLocaleTimeString() })}` : ""}
                 </span>
                 <button
