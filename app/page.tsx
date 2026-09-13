@@ -98,10 +98,14 @@ export default function HomePage() {
           signal: AbortSignal.timeout(50000),
         });
         const data = (await response.json()) as QueryResult;
-        setResult(data);
-        setLastChecked(new Date());
-        if (data.ok) setActiveKey(key);
-        else if (mode === "open") setActiveKey(null);
+        if (mode === "poll" && !data.ok) {
+          setLastChecked(new Date());
+        } else {
+          setResult(data);
+          setLastChecked(new Date());
+          if (data.ok) setActiveKey(key);
+          else if (mode === "open") setActiveKey(null);
+        }
       } catch {
         if (mode === "open") {
           setResult({ ok: false, message: t("main.networkError") });
