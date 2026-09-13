@@ -3,9 +3,9 @@ import { queryUpstream, warmupUpstream } from "../../../lib/upstream";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 30;
 
-warmupUpstream();
+void warmupUpstream();
 
 export async function POST(request: Request) {
   let payload: unknown;
@@ -28,6 +28,6 @@ export async function POST(request: Request) {
     const data = await queryUpstream(cdKey.trim());
     return NextResponse.json(data);
   } catch {
-    return NextResponse.json({ ok: false, message: "Upstream error (network)" });
+    return NextResponse.json({ ok: false, message: "Network error. Please try again." });
   }
 }

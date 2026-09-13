@@ -90,14 +90,20 @@ export default function HomePage() {
         setPolling(true);
       }
       try {
-        const response = await fetch("/api/query", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ cdKey: key }),
-          cache: "no-store",
-          signal: AbortSignal.timeout(50000),
-        });
-        const data = (await response.json()) as QueryResult;
+        const requestInbox = async () => {
+          const response = await fetch("/api/query", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ cdKey: key }),
+            cache: "no-store",
+          });
+          return (await response.json()) as QueryResult;
+        };
+        let data = await requestInbox();
+        if (!data.ok && String(data.message || "").includes("Upstream error")) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          data = await requestInbox();
+        }
         if (mode === "poll" && !data.ok) {
           setLastChecked(new Date());
         } else {

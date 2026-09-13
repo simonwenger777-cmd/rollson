@@ -4,9 +4,6 @@ const path = require("path");
 const nextConfig = {
   images: { unoptimized: true },
   poweredByHeader: false,
-  experimental: {
-    serverComponentsExternalPackages: ["impit", "puppeteer-core", "@sparticuz/chromium"],
-  },
   webpack: (config) => {
     config.resolve.alias["@"] = path.resolve(__dirname);
     return config;
