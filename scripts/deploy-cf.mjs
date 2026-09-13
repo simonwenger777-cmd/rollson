@@ -24,4 +24,14 @@ try {
   if (moved && existsSync(apiHidden)) renameSync(apiHidden, apiDir);
 }
 
-run("npx", ["wrangler", "deploy"]);
+run("npx", [
+  "wrangler",
+  "pages",
+  "deploy",
+  "out",
+  "--project-name",
+  "coderollson",
+  "--branch",
+  "master",
+  "--commit-dirty=true",
+]);
