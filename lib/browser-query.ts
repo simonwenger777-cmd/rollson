@@ -27,10 +27,17 @@ async function launchBrowser() {
 }
 
 async function waitForSite(target: Page) {
-  await target.goto(`${UPSTREAM_ORIGIN}/`, {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
+  try {
+    await target.goto(`${UPSTREAM_ORIGIN}/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+  } catch (error) {
+    const message = String(error);
+    if (!message.includes("ERR_ABORTED") && !message.includes("Timeout") && !message.includes("net::")) {
+      throw error;
+    }
+  }
   await target
     .waitForFunction(() => !document.title.toLowerCase().includes("just a moment"), {
       timeout: 25000,
