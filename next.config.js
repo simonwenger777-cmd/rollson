@@ -4,6 +4,10 @@ const path = require("path");
 const nextConfig = {
   images: { unoptimized: true },
   poweredByHeader: false,
+  serverExternalPackages: ["impit"],
+  experimental: {
+    serverComponentsExternalPackages: ["impit"],
+  },
   webpack: (config) => {
     config.resolve.alias["@"] = path.resolve(__dirname);
     return config;
