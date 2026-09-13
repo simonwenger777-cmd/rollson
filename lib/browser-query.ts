@@ -85,9 +85,9 @@ export async function queryViaBrowser(cdKey: string) {
   return enqueue(async () => {
     let target = await getPage();
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
       const title = await target.title();
-      if (title.toLowerCase().includes("just a moment") || attempt > 0) {
+      if (title.toLowerCase().includes("just a moment")) {
         await waitForSite(target);
       }
 
@@ -99,6 +99,7 @@ export async function queryViaBrowser(cdKey: string) {
       console.error(
         `[browser-query] attempt=${attempt + 1} title=${title} preview=${"preview" in result ? result.preview : JSON.stringify(result.json)}`
       );
+      await new Promise((resolve) => setTimeout(resolve, 400));
     }
 
     throw new Error("browser query still blocked");
