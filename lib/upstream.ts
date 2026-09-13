@@ -37,11 +37,14 @@ async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function impersonatedFetch(url: string, init: RequestInit = {}) {
+async function impersonatedFetch(
+  url: string,
+  init: { method?: "GET" | "POST"; headers?: Record<string, string>; body?: string } = {}
+) {
   return client.fetch(url, {
-    method: init.method || "GET",
-    headers: init.headers as Record<string, string> | undefined,
-    body: typeof init.body === "string" ? init.body : undefined,
+    method: init.method ?? "GET",
+    headers: init.headers,
+    body: init.body,
     redirect: "follow",
   });
 }

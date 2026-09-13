@@ -4,7 +4,6 @@ const path = require("path");
 const nextConfig = {
   images: { unoptimized: true },
   poweredByHeader: false,
-  serverExternalPackages: ["impit"],
   experimental: {
     serverComponentsExternalPackages: ["impit"],
   },
