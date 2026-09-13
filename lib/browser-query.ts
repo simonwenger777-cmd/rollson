@@ -88,10 +88,20 @@ export async function prepareBrowser() {
 
 export async function queryViaBrowser(cdKey: string) {
   return enqueue(async () => {
-    const target = await getPage();
+    let target = await getPage();
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (attempt > 0) await sleep(700);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (attempt === 2) {
+        await openSite(target);
+      }
+      if (attempt === 4) {
+        if (page && !page.isClosed()) await page.close().catch(() => undefined);
+        page = null;
+        target = await getPage();
+      } else if (attempt > 0) {
+        await sleep(700);
+      }
+
       const result = await postKey(target, cdKey);
       if (isUsefulJson(result.json)) return result.json!;
       console.error(
