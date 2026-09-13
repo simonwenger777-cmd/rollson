@@ -2,6 +2,7 @@ import chromium from "@sparticuz/chromium";
 import puppeteer, { Browser, Page } from "puppeteer-core";
 
 const UPSTREAM_ORIGIN = "https://popcornofficial.com";
+const QUERY_BUDGET_MS = 22000;
 
 let browserPromise: Promise<Browser> | null = null;
 let page: Page | null = null;
@@ -20,95 +21,133 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isUsefulJson(json: Record<string, unknown> | null | undefined) {
-  if (!json) return false;
-  const message = typeof json.message === "string" ? json.message : "";
-  return !message.includes("Upstream error");
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 async function launchBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
-    args: [...chromium.args, "--disable-dev-shm-usage", "--no-zygote"],
-    defaultViewport: { width: 1280, height: 720 },
+    args: [
+      ...chromium.args,
+      "--disable-dev-shm-usage",
+      "--no-zygote",
+      "--disable-blink-features=AutomationControlled",
+    ],
+    defaultViewport: { width: 1365, height: 768 },
     executablePath,
     headless: true,
   });
 }
 
-async function openSite(target: Page) {
-  try {
-    await target.goto(`${UPSTREAM_ORIGIN}/`, {
-      waitUntil: "domcontentloaded",
-      timeout: 20000,
-    });
-  } catch {
-    // Cloudflare often aborts the first navigation; the tab still settles.
-  }
-  await sleep(1500);
-}
-
-async function getPage() {
+async function getBrowser() {
   if (!browserPromise) {
     browserPromise = launchBrowser().catch((error) => {
       browserPromise = null;
       throw error;
     });
   }
-  const browser = await browserPromise;
+  return browserPromise;
+}
+
+async function preparePage(target: Page) {
+  await target.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
+  });
+  await target.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+  );
+  try {
+    await target.goto(`${UPSTREAM_ORIGIN}/`, {
+      waitUntil: "domcontentloaded",
+      timeout: 15000,
+    });
+  } catch {
+    // Cloudflare may abort the first navigation.
+  }
+  await target
+    .waitForFunction(() => !document.title.toLowerCase().includes("just a moment"), {
+      timeout: 12000,
+    })
+    .catch(() => undefined);
+  await target.waitForSelector("input.email-input", { timeout: 12000 });
+}
+
+async function getReadyPage() {
+  const browser = await getBrowser();
   if (!page || page.isClosed()) {
     page = await browser.newPage();
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-    );
-    await openSite(page);
+    await preparePage(page);
+  } else {
+    const title = await page.title().catch(() => "");
+    const hasInput = await page.$("input.email-input");
+    if (title.toLowerCase().includes("just a moment") || !hasInput) {
+      await preparePage(page);
+    }
   }
   return page;
 }
 
-async function postKey(target: Page, cdKey: string) {
-  return target.evaluate(async (key) => {
-    const response = await fetch("/api/query", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cdKey: key }),
-    });
-    const text = await response.text();
-    try {
-      return { json: JSON.parse(text) as Record<string, unknown> };
-    } catch {
-      return { json: null, preview: text.slice(0, 120) };
-    }
-  }, cdKey);
+async function submitKey(target: Page, cdKey: string) {
+  const responsePromise = target.waitForResponse(
+    (response) => response.url().includes("/api/query") && response.request().method() === "POST",
+    { timeout: 12000 }
+  );
+
+  const input = await target.waitForSelector("input.email-input", { timeout: 8000 });
+  if (!input) throw new Error("key input missing");
+  await input.click({ clickCount: 3 });
+  await input.type(cdKey, { delay: 20 });
+
+  const button = await target.$("button.primary-btn");
+  if (button) await button.click();
+  else await target.keyboard.press("Enter");
+
+  const response = await responsePromise;
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new Error(`non-json upstream: ${text.slice(0, 80)}`);
+  }
 }
 
 export async function prepareBrowser() {
-  await getPage();
+  await getReadyPage();
 }
 
 export async function queryViaBrowser(cdKey: string) {
-  return enqueue(async () => {
-    let target = await getPage();
-
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      if (attempt === 2) {
-        await openSite(target);
-      }
-      if (attempt === 4) {
-        if (page && !page.isClosed()) await page.close().catch(() => undefined);
+  return withTimeout(
+    enqueue(async () => {
+      let target = await getReadyPage();
+      try {
+        return await submitKey(target, cdKey);
+      } catch (firstError) {
+        console.error("[browser-query] first submit failed", firstError);
+        try {
+          if (page && !page.isClosed()) await page.close();
+        } catch {
+          // ignore
+        }
         page = null;
-        target = await getPage();
-      } else if (attempt > 0) {
-        await sleep(700);
+        await sleep(400);
+        target = await getReadyPage();
+        return submitKey(target, cdKey);
       }
-
-      const result = await postKey(target, cdKey);
-      if (isUsefulJson(result.json)) return result.json!;
-      console.error(
-        `[browser-query] attempt=${attempt + 1} preview=${result.preview || JSON.stringify(result.json)}`
-      );
-    }
-
-    throw new Error("browser query still blocked");
-  });
+    }),
+    QUERY_BUDGET_MS,
+    "inbox lookup"
+  );
 }

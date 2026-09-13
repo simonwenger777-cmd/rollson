@@ -90,20 +90,14 @@ export default function HomePage() {
         setPolling(true);
       }
       try {
-        const requestInbox = async () => {
-          const response = await fetch("/api/query", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ cdKey: key }),
-            cache: "no-store",
-          });
-          return (await response.json()) as QueryResult;
-        };
-        let data = await requestInbox();
-        if (!data.ok && String(data.message || "").includes("Upstream error (403)")) {
-          await new Promise((resolve) => setTimeout(resolve, 300));
-          data = await requestInbox();
-        }
+        const response = await fetch("/api/query", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cdKey: key }),
+          cache: "no-store",
+          signal: AbortSignal.timeout(28000),
+        });
+        const data = (await response.json()) as QueryResult;
         setResult(data);
         setLastChecked(new Date());
         if (data.ok) setActiveKey(key);
