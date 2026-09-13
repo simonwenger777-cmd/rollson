@@ -1,5 +1,15 @@
+import https from "https";
+import { IncomingMessage } from "http";
+import { URL } from "url";
+
 const UPSTREAM_ORIGIN = "https://popcornofficial.com";
 const QUERY_URL = `${UPSTREAM_ORIGIN}/api/query`;
+
+const agent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 8,
+  timeout: 20000,
+});
 
 const BROWSER_HEADERS: Record<string, string> = {
   "user-agent":
@@ -8,6 +18,9 @@ const BROWSER_HEADERS: Record<string, string> = {
   "accept-language": "en-US,en;q=0.9",
   origin: UPSTREAM_ORIGIN,
   referer: `${UPSTREAM_ORIGIN}/`,
+  "sec-ch-ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
   "sec-fetch-dest": "empty",
   "sec-fetch-mode": "cors",
   "sec-fetch-site": "same-origin",
@@ -23,12 +36,9 @@ function cookieHeader() {
     .join("; ");
 }
 
-function storeCookies(headers: Headers) {
-  const listed =
-    typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [];
-  const fallback = headers.get("set-cookie");
-  const raw = listed.length ? listed : fallback ? [fallback] : [];
-  for (const item of raw) {
+function storeSetCookie(raw: string | string[] | undefined) {
+  const list = !raw ? [] : Array.isArray(raw) ? raw : [raw];
+  for (const item of list) {
     const pair = item.split(";")[0];
     const eq = pair.indexOf("=");
     if (eq <= 0) continue;
@@ -38,36 +48,73 @@ function storeCookies(headers: Headers) {
   }
 }
 
-async function upstreamFetch(url: string, init: RequestInit = {}) {
-  const headers = new Headers(BROWSER_HEADERS);
-  if (init.headers) {
-    new Headers(init.headers).forEach((value, key) => headers.set(key, value));
-  }
-  const cookies = cookieHeader();
-  if (cookies) headers.set("cookie", cookies);
+type UpstreamResponse = { status: number; headers: IncomingMessage["headers"]; body: string };
 
-  const response = await fetch(url, {
-    ...init,
-    headers,
-    cache: "no-store",
-    redirect: "follow",
+function request(url: string, method: string, extraHeaders: Record<string, string> = {}, body?: string) {
+  return new Promise<UpstreamResponse>((resolve, reject) => {
+    const parsed = new URL(url);
+    const headers: Record<string, string> = {
+      ...BROWSER_HEADERS,
+      ...extraHeaders,
+      host: parsed.host,
+    };
+    const cookies = cookieHeader();
+    if (cookies) headers.cookie = cookies;
+    if (body) headers["content-length"] = String(Buffer.byteLength(body));
+
+    const req = https.request(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port || 443,
+        path: `${parsed.pathname}${parsed.search}`,
+        method,
+        headers,
+        agent,
+      },
+      (res) => {
+        storeSetCookie(res.headers["set-cookie"]);
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          resolve({
+            status: res.statusCode || 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.setTimeout(25000, () => req.destroy(new Error("upstream timeout")));
+    if (body) req.write(body);
+    req.end();
   });
-  storeCookies(response.headers);
-  return response;
 }
 
 function isRetryableStatus(status: number) {
-  return status === 403 || status === 429 || status === 503 || status === 1020;
+  return status === 403 || status === 429 || status === 503 || status === 1020 || status === 0;
 }
 
 function looksLikeChallenge(body: string) {
-  const lower = body.slice(0, 400).toLowerCase();
+  const lower = body.slice(0, 800).toLowerCase();
   return (
     lower.includes("<html") ||
     lower.includes("just a moment") ||
     lower.includes("cf-browser-verification") ||
-    lower.includes("attention required")
+    lower.includes("attention required") ||
+    lower.includes("cloudflare")
   );
+}
+
+function parseJsonBody(body: string) {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 async function sleep(ms: number) {
@@ -78,9 +125,11 @@ export async function warmupUpstream() {
   if (!warmupPromise) {
     warmupPromise = (async () => {
       try {
-        await upstreamFetch(UPSTREAM_ORIGIN, {
-          method: "GET",
-          headers: { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+        await request(UPSTREAM_ORIGIN + "/", "GET", {
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
         });
       } catch {
         warmupPromise = null;
@@ -96,43 +145,41 @@ export async function queryUpstream(cdKey: string) {
   let lastStatus = 0;
   let lastBody = "";
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (attempt > 0) await sleep(250 * attempt);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (attempt > 0) await sleep(400 * attempt);
 
-    const response = await upstreamFetch(QUERY_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cdKey }),
-    });
+    const response = await request(
+      QUERY_URL,
+      "POST",
+      { "content-type": "application/json" },
+      JSON.stringify({ cdKey })
+    );
 
     lastStatus = response.status;
-    lastBody = await response.text();
+    lastBody = response.body;
+    const json = parseJsonBody(lastBody);
 
-    const contentType = response.headers.get("content-type") || "";
-    const jsonLike = contentType.includes("application/json") || lastBody.trim().startsWith("{");
-
-    if (jsonLike && !looksLikeChallenge(lastBody)) {
-      try {
-        return JSON.parse(lastBody) as Record<string, unknown>;
-      } catch {
-        break;
-      }
+    if (json && !looksLikeChallenge(lastBody)) {
+      return json;
     }
+
+    console.error(
+      `[upstream] attempt=${attempt + 1} status=${response.status} cookies=${cookieJar.size} body=${lastBody.slice(0, 180).replace(/\s+/g, " ")}`
+    );
 
     if (!isRetryableStatus(response.status) && !looksLikeChallenge(lastBody)) {
       break;
     }
 
-    // First 403 from Cloudflare often sets cookies; retry with the jar.
-    if (attempt === 0) {
-      try {
-        await upstreamFetch(UPSTREAM_ORIGIN, {
-          method: "GET",
-          headers: { accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8" },
-        });
-      } catch {
-        // ignore warmup failures and still retry the query
-      }
+    try {
+      await request(UPSTREAM_ORIGIN + "/", "GET", {
+        accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
+      });
+    } catch {
+      // keep retrying the query even if warmup fails
     }
   }
 
