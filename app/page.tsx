@@ -95,7 +95,7 @@ export default function HomePage() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ cdKey: key }),
           cache: "no-store",
-          signal: AbortSignal.timeout(28000),
+          signal: AbortSignal.timeout(50000),
         });
         const data = (await response.json()) as QueryResult;
         setResult(data);
