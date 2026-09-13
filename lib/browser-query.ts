@@ -16,6 +16,16 @@ function enqueue<T>(fn: () => Promise<T>) {
   return run;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isUsefulJson(json: Record<string, unknown> | null | undefined) {
+  if (!json) return false;
+  const message = typeof json.message === "string" ? json.message : "";
+  return !message.includes("Upstream error");
+}
+
 async function launchBrowser() {
   const executablePath = await chromium.executablePath();
   return puppeteer.launch({
@@ -26,28 +36,16 @@ async function launchBrowser() {
   });
 }
 
-async function waitForSite(target: Page) {
+async function openSite(target: Page) {
   try {
     await target.goto(`${UPSTREAM_ORIGIN}/`, {
       waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-  } catch (error) {
-    const message = String(error);
-    if (!message.includes("ERR_ABORTED") && !message.includes("Timeout") && !message.includes("net::")) {
-      throw error;
-    }
-  }
-  await target
-    .waitForFunction(() => !document.title.toLowerCase().includes("just a moment"), {
-      timeout: 25000,
-    })
-    .catch(() => undefined);
-  await target
-    .waitForSelector("input.email-input, form.mailbox-form, .mailbox-form", {
       timeout: 20000,
-    })
-    .catch(() => undefined);
+    });
+  } catch {
+    // Cloudflare often aborts the first navigation; the tab still settles.
+  }
+  await sleep(1500);
 }
 
 async function getPage() {
@@ -63,7 +61,7 @@ async function getPage() {
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     );
-    await waitForSite(page);
+    await openSite(page);
   }
   return page;
 }
@@ -77,9 +75,9 @@ async function postKey(target: Page, cdKey: string) {
     });
     const text = await response.text();
     try {
-      return { okHttp: response.ok, json: JSON.parse(text) as Record<string, unknown> };
+      return { json: JSON.parse(text) as Record<string, unknown> };
     } catch {
-      return { okHttp: false, json: null, preview: text.slice(0, 120) };
+      return { json: null, preview: text.slice(0, 120) };
     }
   }, cdKey);
 }
@@ -90,23 +88,15 @@ export async function prepareBrowser() {
 
 export async function queryViaBrowser(cdKey: string) {
   return enqueue(async () => {
-    let target = await getPage();
+    const target = await getPage();
 
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const title = await target.title();
-      if (title.toLowerCase().includes("just a moment")) {
-        await waitForSite(target);
-      }
-
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt > 0) await sleep(700);
       const result = await postKey(target, cdKey);
-      if (result.json && !(typeof result.json.message === "string" && result.json.message.includes("Upstream error"))) {
-        return result.json;
-      }
-
+      if (isUsefulJson(result.json)) return result.json!;
       console.error(
-        `[browser-query] attempt=${attempt + 1} title=${title} preview=${"preview" in result ? result.preview : JSON.stringify(result.json)}`
+        `[browser-query] attempt=${attempt + 1} preview=${result.preview || JSON.stringify(result.json)}`
       );
-      await new Promise((resolve) => setTimeout(resolve, 400));
     }
 
     throw new Error("browser query still blocked");
