@@ -1,0 +1,13 @@
+node_modules
+.next
+out
+.DS_Store
+*.log
+_extract.py
+_probe.py
+_pretty.py
+_dl.py
+_page_pretty.js
+_site.css
+_popcorn.html
+app-globals.css.tmp
