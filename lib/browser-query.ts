@@ -106,10 +106,18 @@ async function submitKey(target: Page, cdKey: string) {
     { timeout: 12000 }
   );
 
-  const input = await target.waitForSelector("input.email-input", { timeout: 8000 });
-  if (!input) throw new Error("key input missing");
-  await input.click({ clickCount: 3 });
-  await input.type(cdKey, { delay: 20 });
+  await target.waitForSelector("input.email-input", { timeout: 8000 });
+  await target.$eval(
+    "input.email-input",
+    (element, value) => {
+      const input = element as HTMLInputElement;
+      const proto = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+      proto?.set?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    cdKey
+  );
 
   const button = await target.$("button.primary-btn");
   if (button) await button.click();
